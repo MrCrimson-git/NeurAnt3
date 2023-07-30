@@ -1,0 +1,26 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CudaCompile Include="test.cu" />
+    <CudaCompile Include="NeuralNetwork.cu" />
+    <CudaCompile Include="SimulationHandler.cu" />
+    <CudaCompile Include="Colony.cu" />
+    <CudaCompile Include="GlobalSettings.cu" />
+    <CudaCompile Include="Ant.cu" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="main.cpp" />
+    <ClCompile Include="SimulationHandler.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="test.cuh" />
+    <ClInclude Include="GlobalSettings.h" />
+    <ClInclude Include="SimulationHandler.h" />
+    <ClInclude Include="NeuralNetwork.cuh" />
+    <ClInclude Include="Colony.cuh" />
+    <ClInclude Include="Ant.cuh" />
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="NeurAnt3.rc" />
+  </ItemGroup>
+</Project>
