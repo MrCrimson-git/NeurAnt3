@@ -2,41 +2,36 @@
 
 #include <cuda_runtime_api.h>
 #include <assert.h>
-//#define CUDA_ERROR_CHECK
 #define BINARY_SAVE
 
-
+//#define CUDA_ERROR_CHECK
 #define CUDA_CHECK_FORCE \
 { \
-	cudaError_t error = cudaGetLastError(); \
-	std::string errorString = cudaGetErrorString(error); \
-	assert(error == 0); \
+    cudaError_t error = cudaGetLastError(); \
+    if (error != cudaSuccess) { \
+        std::cerr << "CUDA Error: " << cudaGetErrorString(error) << " at " << __FILE__ << ":" << __LINE__ << std::endl; \
+        assert(error == cudaSuccess); \
+    } \
 }
-
 
 #ifdef CUDA_ERROR_CHECK
-#define CUDA_CHECK \
-{ \
-	cudaError_t error = cudaGetLastError(); \
-	std::string errorString = cudaGetErrorString(error); \
-	assert(error == 0); \
-}
+#define CUDA_CHECK CUDA_CHECK_FORCE
 #else
 #define CUDA_CHECK
 #endif //CUDA_ERROR_CHECK
 
 #define INPUT_COUNT 17
-#define MIDDLE_COUNT 13
+#define MIDDLE_COUNT 15
 #define OUTPUT_COUNT 2
 
-#define RAND_SEED 3ULL
+#define RAND_SEED 4ULL
 
 namespace GSettings
 {
 	constexpr int gScreenWidth = 1280;
 	constexpr int gScreenHeight = 800;
 
-	constexpr int gAutoSavePeriod = 10;
+	constexpr int gAutoSavePeriod = 100;
 
 	constexpr int gMapSizeX = 1440;
 	constexpr float g4_MapSizeX = 4.0f / gMapSizeX;

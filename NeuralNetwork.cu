@@ -43,6 +43,12 @@ __device__ void NeuralNetworkBase::Init(int LayerCount, const int *LayerSizes, i
 		mWeights[i] = Weights[i];
 }
 
+__device__ void NeuralNetworkBase::Cleanup()
+{
+	delete[] mLayerSizes;
+	delete[] mWeights;
+}
+
 __device__ void NeuralNetworkBase::CopyWeights(float *const To) const
 {
 	for (int i = 0; i < mWeightCount; ++i)
@@ -80,6 +86,14 @@ __device__ void NeuralNetwork::Init(const NeuralNetworkBase& Base)
 	}
 }
 
+__device__ void NeuralNetwork::Cleanup()
+{
+	delete[] mWeights;
+	delete[] mNeurodes;
+	for (int i = 1; i < mLayerCount - 1; ++i)
+		delete[] mNeurodes[i];
+}
+
 __device__ void NeuralNetwork::Reset(const NeuralNetworkBase& Base)
 {
 	int start = 0;
@@ -89,31 +103,6 @@ __device__ void NeuralNetwork::Reset(const NeuralNetworkBase& Base)
 		start += (mLayerSizes[i] + 1) * (mLayerSizes[i + 1]);
 	}
 }
-
-#if false
-__global__ void calculateLayer(float* From, int FromSize, float* To, float* AxonMatrix)
-{
-	unsigned int idx = (blockIdx.x * blockDim.x) + threadIdx.x;
-	float* axonRow = &AxonMatrix[idx * (FromSize + 1)];
-
-	float sum = 1 * axonRow[FromSize];
-	for (int k = 0; k < FromSize; ++k)
-		sum += From[k] * axonRow[k];
-
-	//constexpr float K = 1.f;
-	To[idx] = tanhf(sum);//(1.f - 2.f / (1.f + expf(-K * sum)));
-
-	/*unsigned int idx = (blockIdx.x * blockDim.x) + threadIdx.x;
-
-	float *axonRow = &AxonMatrix[idx * (blockDim.x + 1)];
-	float sum = 1 * axonRow[FromSize];
-	for (int i = 0; i < FromSize; ++i)
-		sum += From[i] * axonRow[i];
-
-	//constexpr float K = 1.f;
-	To[idx] = tanhf(sum);//(1.f - 2.f / (1.f + expf(-K * sum)));*/
-}
-#endif
 
 __device__ void NeuralNetwork::Calculate(float* Inputs, float* Outputs)
 {
@@ -145,7 +134,7 @@ __device__ void NeuralNetwork::Calculate(float* Inputs, float* Outputs)
 			}
 
 			//constexpr float K = 1.f;
-			mNeurodes[i][j] = tanhf(sum) * M_2_PI;//(1.f - 2.f / (1.f + expf(-K * sum)));
+			mNeurodes[i][j] = tanhf(sum);//(1.f - 2.f / (1.f + expf(-K * sum)));
 			//PRINTF(mNeurodes[i][j]);
 		}
 	}
