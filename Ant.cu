@@ -56,25 +56,6 @@ __device__ inline float2 rotate(const float Length, const float Angle)
 	return { Length * cosa, Length * sina };
 }
 
-/*__device__ inline float rotationFrom_old(const float2 In, float Angle)
-{
-	float tang;
-	if (!In.x)
-		tang = In.y >= 0.f ? 0.5f : -0.5f;
-	else
-		tang = atanf(In.y / In.x) * M_1_PI;
-	if (In.x < 0)
-		tang += In.y < 0 ? 1 : -1;
-
-	return normalize(tang - Angle);
-}*/
-
-__device__ inline float rotationFrom_new(const float2 In, float Angle)
-{
-	float tang = atan2f(In.y, In.x) * M_1_PI;
-	return normalize(Angle - tang);
-}
-
 __device__ inline float rotationFrom(const float2 In, float Angle)
 {
 	float tang = atan2f(In.y, In.x) * M_1_PI;
@@ -86,27 +67,45 @@ __device__ void Ant::Died()
 	mState->mRotation = -1.f + 2.f / GS::gAntCount * (this - mBase->mArmy);
 	mState->mPosition = mBase->mState->mPosition;
 	if (mState->mHasFlag)
-		mBase->AddPoint(-1, 0);
+		mBase->AddPoint(-1);
 	mState->mHasFlag = false;
-	mAlive = true;
 }
 
-__device__ void Ant::Init(Colony *Base, AntState *State)
+__device__ void Ant::FreeMemory()
+{
+	mNeuralSystem.Cleanup();
+
+	if (mAntRandState)
+	{
+		delete mAntRandState;
+		mAntRandState = nullptr;
+	}
+}
+
+__device__ void Ant::Init(Colony *Base, AntState *State, AntType Type)
 {
 	mBase = Base;
-	mAlive = true;
 	mNeuralSystem.Init(mBase->mHiveMind);
 	
 	mState = State;
+	mStrategy = Type;
 	mState->mPosition = mBase->mState->mPosition;
 	mState->mRotation = -1.f + 2.f / GS::gAntCount * (this - mBase->mArmy);
 	mState->mHasFlag = false;
+	mAntRandState = nullptr;
+
+	if (Type == AntType::RANDOM)
+	{
+		mAntRandState = new AntRandState;
+		curand_init(RAND_SEED, this - mBase->mArmy, 0ULL, &mAntRandState->mRandState);
+		mOutputs[0] = 0.f;
+		mOutputs[1] = 0.f;
+	}
 }
 
 __device__ void Ant::Reset(Colony *Base, AntState *State)
 {
 	mBase = Base;
-	mAlive = true;
 	mNeuralSystem.Reset(mBase->mHiveMind);
 
 	mState = State;
@@ -115,11 +114,8 @@ __device__ void Ant::Reset(Colony *Base, AntState *State)
 	mState->mHasFlag = false;
 }
 
-__device__ void Ant::Step(const int StepCount)
+__device__ void Ant::Step()
 {
-	if (!mAlive)
-		return;
-
 	const Colony &otherBase = *mBase->mOtherColony;
 	const float distanceToBase = length(mState->mPosition - mBase->mState->mPosition);
 	const float rotationToBase = rotationFrom(mBase->mState->mPosition - mState->mPosition, mState->mRotation);
@@ -137,12 +133,12 @@ __device__ void Ant::Step(const int StepCount)
 	{
 		Ant &otherAnt = otherBase.mArmy[i];
 		const float curDist2 = length2(mState->mPosition - otherAnt.mState->mPosition);
-		if (curDist2 < GS::gAntSize2)
+		/*if (curDist2 < GS::gAntSize2)
 		{
 			const float enemyRot = rotationFrom(otherAnt.mState->mPosition - mState->mPosition, mState->mRotation);
 			if (enemyRot < GS::gAntAttackAngle && enemyRot > -GS::gAntAttackAngle)
 				otherAnt.Died();
-		}
+		}*/
 
 		if (curDist2 < enemyDistance2_1)
 		{
@@ -157,7 +153,7 @@ __device__ void Ant::Step(const int StepCount)
 			enemyDistance2_2 = curDist2;
 		}
 	}
-	
+
 	for (int i = 0; i < GS::gAntCount; ++i)
 	{
 		const Ant &otherAnt = mBase->mArmy[i];
@@ -200,28 +196,106 @@ __device__ void Ant::Step(const int StepCount)
 	mInputs[__COUNTER__] = allyAnt->mState->mHasFlag ? 1.0f : -1.0f;
 
 #if __COUNTER__ != INPUT_COUNT
-	#error INPUT_COUNT has to be adjusted
+#error INPUT_COUNT has to be adjusted
 #endif
 
-	mNeuralSystem.Calculate(mInputs, mOutputs);
+	//Make decision
+	switch (mStrategy)
+	{
+	case AntType::NEURAL: Step_Neural(); break;
+	case AntType::GOGETTER: Step_GoGetter(); break;
+	case AntType::ATTACKER: Step_Attacker(); break;
+	default: Step_Random();
+	}
+
 	mState->mRotation = normalize(mState->mRotation + mOutputs[0] * GS::gAntMaxRotation);
 	mState->mPosition += rotate(GSettings::gAntMaxVelocity * (mOutputs[1] + 1.0f) * 0.5f, mState->mRotation);
 
-#if false
-	mState->mPosition += rotate(GSettings::gAntMaxVelocity * (mOutputs[1] + 1.0f) * 0.5f, mState->mRotation);
-#endif
+	//Attack the closer enemy ant if they are close enough and in direction
+	const float newEnemyDistance2_1 = length2(mState->mPosition - enemyAnt_1->mState->mPosition);
+	const float newEnemyDistance2_2 = length2(mState->mPosition - enemyAnt_2->mState->mPosition);
+
+	bool enemy1IsValid = false;
+	bool enemy2IsValid = false;
+	float enemyRot;
+
+	if (newEnemyDistance2_1 < GS::gAntSize2) {
+		enemyRot = rotationFrom(enemyAnt_1->mState->mPosition - mState->mPosition, mState->mRotation);
+		if (enemyRot < GS::gAntAttackAngle && enemyRot > -GS::gAntAttackAngle) {
+			enemy1IsValid = true;
+		}
+	}
+
+	if (newEnemyDistance2_2 < GS::gAntSize2) {
+		enemyRot = rotationFrom(enemyAnt_2->mState->mPosition - mState->mPosition, mState->mRotation);
+		if (enemyRot < GS::gAntAttackAngle && enemyRot > -GS::gAntAttackAngle) {
+			enemy2IsValid = true;
+		}
+	}
+
+	if (enemy1IsValid && enemy2IsValid) {
+		if (newEnemyDistance2_1 < newEnemyDistance2_2) {
+			enemyAnt_1->Died();
+	}
+		else {
+			enemyAnt_2->Died();
+		}
+	}
+	else if (enemy1IsValid) {
+		enemyAnt_1->Died();
+	}
+	else if (enemy2IsValid) {
+		enemyAnt_2->Died();
+	}
 
 	if (mState->mHasFlag)
 	{
 		if (distanceToBase < GSettings::gNestRadius)
 		{
-			mBase->AddPoint(1, 0/*Counter*/);
+			mBase->AddPoint(1);
 			mState->mHasFlag = false;
 		}
 	}
 	else if (distanceToOtherBase < GSettings::gNestRadius)
 	{
-		mBase->AddPoint(0, 0/*Counter*/);
+		mBase->AddPoint(0);
 		mState->mHasFlag = true;
 	}
+}
+
+__device__ void Ant::Step_Neural()
+{
+	mNeuralSystem.Calculate(mInputs, mOutputs);
+}
+
+__device__ void Ant::Step_Random()
+{
+	for (int i = 0; i < 2; ++i)
+	{
+		//Adds random number between +/- mMaxDiffChange
+		mAntRandState->mPrevDiff[i] += (curand_uniform(&mAntRandState->mRandState) - 0.5f) * 2.0f * mAntRandState->mMaxDiffChange;
+		mOutputs[i] += mAntRandState->mPrevDiff[i];
+
+		//Clamp
+		if (abs(mOutputs[i]) > 1.f)
+		{
+			//Reset mPrevDiff so it won't keep trying to change in the wrong direction as much
+			mAntRandState->mPrevDiff[i] = 0.f;
+			mOutputs[i] = mOutputs[i] > 1.f ? 1.f : -1.f;
+		}
+	}
+}
+
+__device__ void Ant::Step_GoGetter()
+{
+	const float rotationToNextBase = mState->mHasFlag ? mInputs[2] : mInputs[4]; // rotationToBase : rotationToOtherBase
+	
+	mOutputs[0] = fmaxf(fminf(-rotationToNextBase / GS::gAntMaxRotation, 1.f), -1.f);
+	mOutputs[1] = 1.0;
+}
+
+__device__ void Ant::Step_Attacker()
+{
+	mOutputs[0] = fmaxf(fminf(-mInputs[5] / GS::gAntMaxRotation, 1.f), -1.f);	// rotationToEnemy_1
+	mOutputs[1] = 1.0;
 }

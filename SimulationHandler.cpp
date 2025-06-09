@@ -22,7 +22,7 @@
 #pragma comment(lib, "dwrite") //links dwrite.lib in a more controlled manner
 #include <wincodec.h>
 
-SimulationHandler* SimulationHandler::sSimulationHandler = NULL;
+SimulationHandler *SimulationHandler::sSimulationHandler = NULL;
 
 template<class Interface>
 inline void SafeRelease(
@@ -41,9 +41,9 @@ EXTERN_C IMAGE_DOS_HEADER __ImageBase;
 #endif
 
 SimulationHandler::SimulationHandler() : mHwnd(NULL),
-    mDirect2dFactory(NULL),
-    mRenderTarget(NULL),
-    mBrush(NULL)
+mDirect2dFactory(NULL),
+mRenderTarget(NULL),
+mBrush(NULL)
 {
     cudaMalloc(&mDevice_WeightTransfer, sizeof(float) * GS::gWeightCount * (GS::gEnvironmentCount + 1));
     cudaMallocHost(&mHost_WeightTransfer, sizeof(float) * GS::gWeightCount * (GS::gEnvironmentCount + 1));
@@ -54,7 +54,6 @@ SimulationHandler::~SimulationHandler()
     StopSimulation();
     cudaFree(mDevice_WeightTransfer);
     cudaFreeHost(mHost_WeightTransfer);
-    //while (mWindowThread != NULL) {} //ToDo: Any check that window thread stopped
 }
 
 void SimulationHandler::ChangeSpeed()
@@ -76,23 +75,48 @@ void SimulationHandler::CleanUpWindowThread()
     mCloseWindow = false;
 }
 
+void SimulationHandler::DuelThread(int First, int Second)
+{
+    mSimMode = DUEL;
+    GenerateStartingState_Duel((Ant::AntType)max(-First, 0), (Ant::AntType)max(-Second, 0));
+    cudaDeviceSynchronize();
+
+    GV::gAntsToDraw = GS::gColonyCount * GS::gAntCount;
+
+    while ((!mStopSimulation || mCloseWindow) && (mStepCounter != GS::gSimulationTime))
+    {
+        if (mCloseWindow)
+            CleanUpWindowThread();
+
+        if (!mPaused)
+        {
+            SimulationStep_Duel();
+            if (mSlowMode && (mStepCounter % 4 == 0)) Sleep(1);
+        }
+        else
+            Sleep(1);
+    }
+    if (mStepCounter == GS::gSimulationTime)
+        Evaluate_Duel();
+}
+
 void SimulationHandler::GenerateLoadedState()
 {
     std::string path = std::format("{}-{}-{}", INPUT_COUNT, MIDDLE_COUNT, OUTPUT_COUNT);
     std::filesystem::path SaveDir("SaveFiles\\" + path);
     int maxGen = 0;
-    for(auto const &file : std::filesystem::directory_iterator{SaveDir})
+    for (auto const &file : std::filesystem::directory_iterator{ SaveDir })
     {
-        int gen;
-        sscanf_s(file.path().filename().string().c_str(), "%*d-%d", &gen);
-        if (gen > maxGen) maxGen = gen;
+        int seed, gen;
+        sscanf_s(file.path().filename().string().c_str(), "%d-%d", &seed, &gen);
+        if (seed == RAND_SEED && gen > maxGen) maxGen = gen;
     }
 
     std::ifstream saveFile(std::format("{}/{}-{}.nan", SaveDir.string(), RAND_SEED, maxGen), std::ios::in | std::ios::binary);
     saveFile.read(reinterpret_cast<char *>(mHost_WeightTransfer), sizeof(float) * GS::gWeightCount * (GS::gEnvironmentCount + 1));
     saveFile.close();
-    
-    mGeneration = maxGen;
+
+    mIteration = maxGen;
 
     GenerateStartingState(true);
 }
@@ -101,7 +125,7 @@ void SimulationHandler::LoadState()
 {
     if (!mSimulationThread)
     {
-        mSimulationThread = new std::thread(&SimulationHandler::SimulationThread, this, true);
+        mSimulationThread = new std::thread(&SimulationHandler::SimulationThread, this, LOAD);
         mPaused = true;
     }
 }
@@ -119,26 +143,24 @@ void SimulationHandler::PauseSimulation()
 
 void SimulationHandler::SaveState() const
 {
-    cudaDeviceSynchronize();
-    CUDA_CHECK
-
     SaveDeviceToHost();
     cudaDeviceSynchronize();
     CUDA_CHECK
 
-    std::string path = std::format("{}-{}-{}", INPUT_COUNT, MIDDLE_COUNT, OUTPUT_COUNT);
+        std::string path = std::format("{}-{}-{}", INPUT_COUNT, MIDDLE_COUNT, OUTPUT_COUNT);
     std::filesystem::path SaveDir("SaveFiles\\" + path);
     if (!std::filesystem::exists(SaveDir))
         try
-        {
-            std::filesystem::create_directory(SaveDir);
-        } catch (const std::exception &ex)
-        {
-            std::cerr << "Error creating directory: " << ex.what() << std::endl;
-        }
+    {
+        std::filesystem::create_directory(SaveDir);
+    }
+    catch (const std::exception &ex)
+    {
+        std::cerr << "Error creating directory: " << ex.what() << std::endl;
+    }
 
 #ifdef BINARY_SAVE
-    std::ofstream saveFile(std::format("{}/{}-{}.nan", SaveDir.string(), RAND_SEED, mGeneration), std::ios::out | std::ios::binary);
+    std::ofstream saveFile(std::format("{}/{}-{}.nan", SaveDir.string(), RAND_SEED, mIteration), std::ios::out | std::ios::binary);
     saveFile.write(reinterpret_cast<const char *>(mHost_WeightTransfer), sizeof(float) * GS::gWeightCount * (GS::gEnvironmentCount + 1));
 #else
     std::ofstream saveFile(SaveDir.string() + "/savefile.nan");
@@ -153,11 +175,81 @@ void SimulationHandler::SaveState() const
     CUDA_CHECK
 }
 
+bool SimulationHandler::StartDuel()
+{
+    std::string path = std::format("{}-{}-{}", INPUT_COUNT, MIDDLE_COUNT, OUTPUT_COUNT);
+    std::filesystem::path SaveDir("SaveFiles\\" + path);
+
+    if (!std::filesystem::exists(SaveDir))
+    {
+        std::cout << "\nNo savefiles were found!" << std::endl << std::endl
+            << "Press Enter to continue" << std::endl;
+        std::cin.ignore(); std::cin.ignore();
+        return false;
+    }
+
+    std::cout << "\nChoose which teams should be compared:" << std::endl << std::endl
+        << " -1  : Random movement team" << std::endl
+        << " -2  : Pointgetter team" << std::endl
+        << " -3  : Attacker team" << std::endl
+        << " -4  : Half-pointgetter half-attacker team" << std::endl << std::endl
+        << "0..* : Trained network teams by iteration" << std::endl << std::endl;
+
+    int first, second;
+    std::cout << "First team = ";
+    std::cin >> first;
+    if (std::cin.fail() || first < -4)
+    {
+        std::cin.clear();
+        std::cin.ignore((std::numeric_limits<std::streamsize>::max)(), '\n');
+        std::cout << "Invalid input. Please enter a valid number!";
+        std::cin.ignore();
+        return false;
+    }
+
+    std::string saveFilePath = std::format("{}/{}-{}.nan", SaveDir.string(), RAND_SEED, first);
+    if (first >= 0 && !ReadSaveFile(saveFilePath, 0UI16))
+    {
+        std::cout << "File doesn't exist: " << saveFilePath << std::endl;
+        std::cin.ignore();
+        std::cin.ignore();
+        return false;
+    }
+
+    std::cout << "Second team = ";
+    std::cin >> second;
+    if (std::cin.fail() || second < -4)
+    {
+        std::cin.clear();
+        std::cin.ignore((std::numeric_limits<std::streamsize>::max)(), '\n');
+        std::cout << "Invalid input. Please enter a valid number!";
+        std::cin.ignore();
+        return false;
+    }
+
+    saveFilePath = std::format("{}/{}-{}.nan", SaveDir.string(), RAND_SEED, second);
+    if (second >= 0 && !ReadSaveFile(saveFilePath, 1UI16))
+    {
+        std::cout << "File doesn't exist: " << saveFilePath << std::endl;
+        std::cin.ignore();
+        std::cin.ignore();
+        return false;
+    }
+
+    if (!mSimulationThread)
+    {
+        mSimMode = DUEL;
+        mSimulationThread = new std::thread(&SimulationHandler::DuelThread, this, first, second);
+        mPaused = true;
+    }
+    return true;
+}
+
 void SimulationHandler::StartSimulation()
 {
     if (!mSimulationThread)
     {
-        mSimulationThread = new std::thread(&SimulationHandler::SimulationThread, this, false);
+        mSimulationThread = new std::thread(&SimulationHandler::SimulationThread, this, NEW);
         mPaused = true;
     }
 }
@@ -199,7 +291,7 @@ void SimulationHandler::OnRender()
         mDirect2dFactory->CreateHwndRenderTarget(D2D1::RenderTargetProperties(), D2D1::HwndRenderTargetProperties(mHwnd, size), &mRenderTarget);
 
         // Create the brush.
-        mRenderTarget->CreateSolidColorBrush( D2D1::ColorF(D2D1::ColorF::LightSlateGray), &mBrush);
+        mRenderTarget->CreateSolidColorBrush(D2D1::ColorF(D2D1::ColorF::LightSlateGray), &mBrush);
     }
 
     //Copy variable so it won't change during render:
@@ -210,7 +302,7 @@ void SimulationHandler::OnRender()
 
     CUDA_CHECK
 
-    D2D1::Matrix3x2F baseTransform(D2D1::Matrix3x2F::Translation(size.width * .5f, size.height * .5f));
+        D2D1::Matrix3x2F baseTransform(D2D1::Matrix3x2F::Translation(size.width * .5f, size.height * .5f));
     mRenderTarget->BeginDraw();
     mRenderTarget->SetTransform(baseTransform);
     mRenderTarget->Clear(D2D1::ColorF(D2D1::ColorF::White));
@@ -244,20 +336,6 @@ void SimulationHandler::OnRender()
             0.5f
         );
     }
-
-    //Colorpicker
-#if 0
-    //ToDo: Not quite working
-    auto getColonyColor = [](int I) -> D2D1::ColorF
-    {
-        float remainder;
-        float ratio = modf(I * 3.f / GS::gColonyCount, &remainder);
-        int firstColor = int (0xFF * (1 - ratio));
-        int secondColor = int (0xFF * ratio);
-        UINT32 color = firstColor * 0x100 ^ (int)remainder + secondColor * 0x100 ^ (((int) remainder + 1) % 3);
-        return D2D1::ColorF(color);
-    };
-#endif
 
     //Drawing bases
     for (int i = 0; i < GS::gColonyCount; ++i)
@@ -298,53 +376,28 @@ void SimulationHandler::OnRender()
     //Drawing text
     mRenderTarget->SetTransform(D2D1::Matrix3x2F::Translation(5.f, 15.f));
     mBrush->SetColor(D2D1::ColorF(D2D1::ColorF::Black));
-    //RefreshStringBuffer();
+
+#if TEXT_RENDER
+    RefreshStringBuffer();
     mRenderTarget->DrawText(mStrBuffer.c_str(), (UINT32)mStrBuffer.size(), mTextFormat, D2D1::RectF(0.f, 0.f, rtSize.width, rtSize.height), mBrush);
+#endif //TEXT_RENDER
 
     mRenderTarget->EndDraw();
 }
 
-void SimulationHandler::OnResize(UINT width, UINT height)
-{
-    if (mRenderTarget)
-    {
-        // Note: This method can fail, but it's okay to ignore the
-        // error here, because the error will be returned again
-        // the next time EndDraw is called.
-        mRenderTarget->Resize(D2D1::SizeU(width, height));
-    }
-}
-
+#if TEXT_RENDER
 void SimulationHandler::RefreshStringBuffer()
 {
     static long lastTime = 0, curTime;
     curTime = std::clock();
-    mStrBuffer = std::format(L"{} {} {} this thing also. Click-clock: {}", L"TEST", 2, L"test", curTime - lastTime);
+    mStrBuffer = std::format(L"{} {} {} test text. Frametime: {}", L"TEST", 2, L"test", curTime - lastTime);
     lastTime = curTime;
 }
+#endif TEXT_RENDER
 
-void SimulationHandler::SimulationStep()
+void SimulationHandler::SimulationThread(SimMode LoadState)
 {
-
-    DefenderStep();
-    CUDA_CHECK
-    AttackerStep();
-    CUDA_CHECK
-    ++mStepCounter;
-
-    if (mStepCounter == GS::gSimulationTime)
-    {
-        cudaDeviceSynchronize();
-        Evaluate();
-        CUDA_CHECK
-        mStepCounter = 0;
-        GenerateStartingState();
-    }
-    //RefreshStringBuffer();
-}
-
-void SimulationHandler::SimulationThread(bool LoadState)
-{
+    mSimMode = LOAD;
     LoadState ? GenerateLoadedState() : GenerateStartingState();
 
     while (!mStopSimulation || mCloseWindow)
@@ -352,8 +405,13 @@ void SimulationHandler::SimulationThread(bool LoadState)
         if (mCloseWindow)
             CleanUpWindowThread();
 
-        if (!mPaused && !mSlowMode)
+        if (!mPaused)
+        {
             SimulationStep();
+            if (mSlowMode && (mStepCounter % 1 == 0)) Sleep(1);
+        }
+        else
+            Sleep(1);
     }
 }
 
@@ -363,10 +421,10 @@ void SimulationHandler::WindowThread()
 
     if (SUCCEEDED(CoInitialize(NULL)))
     {
-        D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, &mDirect2dFactory);
+        D2D1CreateFactory(D2D1_FACTORY_TYPE_MULTI_THREADED, &mDirect2dFactory);
 
-        DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(mDWriteFactory), reinterpret_cast<IUnknown **>(&mDWriteFactory));
-        mDWriteFactory->CreateTextFormat(L"Arial", NULL, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 32, L"" /*locale*/, &mTextFormat);
+        DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(mWriteFactory), reinterpret_cast<IUnknown **>(&mWriteFactory));
+        mWriteFactory->CreateTextFormat(L"Arial", NULL, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 32, L"" /*locale*/, &mTextFormat);
 
         WNDCLASSEX wcex = { sizeof(WNDCLASSEX) };
         wcex.style = CS_HREDRAW | CS_VREDRAW;
@@ -391,14 +449,12 @@ void SimulationHandler::WindowThread()
 
             SetWindowPos(mHwnd, NULL, NULL, NULL, static_cast<int>(ceil(GS::gMapSizeX * dpi / 96.f)), static_cast<int>(ceil(GS::gMapSizeY * dpi / 96.f)), SWP_NOMOVE | SWP_NOZORDER);  //TODO: Research what does what
             ShowWindow(mHwnd, SW_SHOWNORMAL);
-            UpdateWindow(mHwnd); 
+            UpdateWindow(mHwnd);
 
             MSG msg;
             msg.message = WM_NULL;
             while (msg.message != WM_QUIT)
             {
-                if (mSlowMode && !mPaused)
-                    SimulationStep();
                 if (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE))
                 {
                     TranslateMessage(&msg);
@@ -460,7 +516,8 @@ LRESULT CALLBACK SimulationHandler::WndProc(HWND HWnd, UINT Message, WPARAM WPar
             {
                 UINT width = LOWORD(LParam);
                 UINT height = HIWORD(LParam);
-                pSimulationHandler->OnResize(width, height);
+                if (pSimulationHandler->mRenderTarget)
+                    pSimulationHandler->mRenderTarget->Resize(D2D1::SizeU(width, height));
             }
             result = 0;
             wasHandled = true;
@@ -507,4 +564,15 @@ LRESULT CALLBACK SimulationHandler::WndProc(HWND HWnd, UINT Message, WPARAM WPar
 
     return result;
 
+}
+
+inline bool SimulationHandler::ReadSaveFile(const std::string &SaveFile, const unsigned short Slot)
+{
+    if (!std::filesystem::exists(std::filesystem::path(SaveFile)))
+        return false;
+
+    std::ifstream saveFile(SaveFile, std::ios::in | std::ios::binary);
+    saveFile.read(reinterpret_cast<char *>(mHost_WeightTransfer + GS::gWeightCount * Slot), sizeof(float) * GS::gWeightCount);
+    saveFile.close();
+    return true;
 }

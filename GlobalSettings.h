@@ -2,41 +2,38 @@
 
 #include <cuda_runtime_api.h>
 #include <assert.h>
-//#define CUDA_ERROR_CHECK
 #define BINARY_SAVE
 
-
+//#define CUDA_ERROR_CHECK
 #define CUDA_CHECK_FORCE \
 { \
-	cudaError_t error = cudaGetLastError(); \
-	std::string errorString = cudaGetErrorString(error); \
-	assert(error == 0); \
+    cudaError_t error = cudaGetLastError(); \
+    if (error != cudaSuccess) { \
+        std::cerr << "CUDA Error: " << cudaGetErrorString(error) << " at " << __FILE__ << ":" << __LINE__ << std::endl; \
+        assert(error == cudaSuccess); \
+    } \
 }
-
 
 #ifdef CUDA_ERROR_CHECK
-#define CUDA_CHECK \
-{ \
-	cudaError_t error = cudaGetLastError(); \
-	std::string errorString = cudaGetErrorString(error); \
-	assert(error == 0); \
-}
+#define CUDA_CHECK CUDA_CHECK_FORCE
 #else
 #define CUDA_CHECK
 #endif //CUDA_ERROR_CHECK
 
 #define INPUT_COUNT 17
-#define MIDDLE_COUNT 13
+#define MIDDLE_COUNT 15
 #define OUTPUT_COUNT 2
 
-#define RAND_SEED 3ULL
+#define BIASED false
+
+#define RAND_SEED 5ULL
 
 namespace GSettings
 {
 	constexpr int gScreenWidth = 1280;
 	constexpr int gScreenHeight = 800;
 
-	constexpr int gAutoSavePeriod = 10;
+	constexpr int gAutoSavePeriod = 100;
 
 	constexpr int gMapSizeX = 1440;
 	constexpr float g4_MapSizeX = 4.0f / gMapSizeX;
@@ -64,10 +61,21 @@ namespace GSettings
 	__constant__ constexpr int gLayerCount = sizeof(gLayers) / sizeof(gLayers[0]);
 	__device__ constexpr int CalcWeightCount()
 	{
+		return INPUT_COUNT * MIDDLE_COUNT + MIDDLE_COUNT * (MIDDLE_COUNT - 1) / 2 + MIDDLE_COUNT * OUTPUT_COUNT;
+
 		int ret = 0;
+		for (int i = 0; i < gLayerCount - 1; ++i)
+		{
+			ret += (gLayers[i] + BIASED) * gLayers[i + 1];
+			if (i != 0)
+				ret += gLayers[i] * (gLayers[i] - 1) / 2;
+		}
+
+
+		/*int ret = 0;
 		for (int i = 1; i < gLayerCount; ++i)
 			ret += gLayers[i] * (gLayers[i - 1] + 1);
-		return ret;
+		return ret;*/
 	}
 	__constant__ constexpr int gWeightCount = CalcWeightCount(); //CUDA gives warning, but works as intended.
 

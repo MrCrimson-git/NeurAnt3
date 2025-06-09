@@ -13,6 +13,7 @@
   <PropertyGroup Label="Globals">
     <ProjectGuid>{A9C39C87-8595-4CBE-AA95-DCDC24EF4085}</ProjectGuid>
     <RootNamespace>NeurAnt3</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
@@ -66,7 +67,7 @@
     <CudaCompile>
       <TargetMachinePlatform>64</TargetMachinePlatform>
       <GenerateRelocatableDeviceCode>true</GenerateRelocatableDeviceCode>
-      <CodeGeneration>compute_86,sm_86</CodeGeneration>
+      <CodeGeneration>compute_50,sm_50</CodeGeneration>
     </CudaCompile>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -91,7 +92,7 @@
     <CudaCompile>
       <TargetMachinePlatform>64</TargetMachinePlatform>
       <GenerateRelocatableDeviceCode>true</GenerateRelocatableDeviceCode>
-      <CodeGeneration>compute_86,sm_86</CodeGeneration>
+      <CodeGeneration>compute_50,sm_50</CodeGeneration>
       <GPUDebugInfo>false</GPUDebugInfo>
     </CudaCompile>
   </ItemDefinitionGroup>
@@ -103,9 +104,9 @@
     <ClInclude Include="Ant.cuh" />
     <ClInclude Include="Colony.cuh" />
     <ClInclude Include="GlobalSettings.h" />
+    <ClInclude Include="Menu.h" />
     <ClInclude Include="NeuralNetwork.cuh" />
     <ClInclude Include="SimulationHandler.h" />
-    <ClInclude Include="test.cuh" />
   </ItemGroup>
   <ItemGroup>
     <CudaCompile Include="Ant.cu" />
@@ -113,7 +114,6 @@
     <CudaCompile Include="GlobalSettings.cu" />
     <CudaCompile Include="NeuralNetwork.cu" />
     <CudaCompile Include="SimulationHandler.cu" />
-    <CudaCompile Include="test.cu" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="NeurAnt3.rc" />
